@@ -1,4 +1,3 @@
-
 /*--------------------------------------------------------------------*/
 /*--- x86- and AMD64-specific definitions.          cg-x86-amd64.c ---*/
 /*--------------------------------------------------------------------*/
@@ -59,7 +58,7 @@ static void micro_ops_warn(Int actual_size, Int used_size, Int line_size)
  * is returned via *LLc.
  */
 static
-Int Intel_cache_info(Int level, cache_t* I1c, cache_t* D1c, cache_t* LLc)
+Int Intel_cache_info(Int level, cache_t* I1c, cache_t* D1c, cache_t* L2c, cache_t* LLc, cache_t* iTLBc, cache_t* dTLBc, cache_t* L2TLBc)
 {
    Int cpuid1_eax;
    Int cpuid1_ignore;
@@ -77,6 +76,14 @@ Int Intel_cache_info(Int level, cache_t* I1c, cache_t* D1c, cache_t* LLc)
    Bool  L3_found = False;
    cache_t L3c = { 0, 0, 0 };
 
+   /* TLB inits */
+    //set them to false and according to the findings, change them
+    //this is done because cachegrind may run on pcs that don't have TLB
+    Bool ITLB=False, DTLB=False, L2TLB=False;
+    *iTLBc  =  (cache_t){-1,-1,-1};
+    *dTLBc  =  (cache_t){-1,-1,-1};
+    *L2TLBc =  (cache_t){-1,-1,-1};
+    
    if (level < 2) {
       VG_(dmsg)("warning: CPUID level < 2 for Intel processor (%d)\n", level);
       return -1;
@@ -92,13 +99,56 @@ Int Intel_cache_info(Int level, cache_t* I1c, cache_t* D1c, cache_t* LLc)
                     (Int*)&info[8], (Int*)&info[12]);
    trials  = info[0] - 1;   /* AL register - bits 0..7 of %eax */
    info[0] = 0x0;           /* reset AL */
-
+    
    if (0 != trials) {
       VG_(dmsg)("warning: non-zero CPUID trials for Intel processor (%d)\n",
                 trials);
       return -1;
    }
 
+    /* Do TLB here because later, info gets altered to extract cache info! */
+    for(i=0;i<16;i++){
+        switch(info[i]){
+            case 0x01: ITLB=True; *iTLBc= (cache_t) {    4096,  4,  32}; break;
+            case 0x02: break;//ITLB=True; *iTLBc= (cache_t) { 4194304, -1,   2}; break;
+            case 0x03: DTLB=True; *dTLBc= (cache_t) {    4096,  4,  64}; break;
+            case 0x04: break;//DTLB=True; *dTLBc= (cache_t) { 4194304,  4,   8}; break;
+            case 0x05: break;//DTLB=True; *dTLBc= (cache_t) { 4194304,  4,  32}; break;
+            case 0x0b: break;//ITLB=True; *iTLBc= (cache_t) { 4194304,  4,   4}; break;
+            case 0x4f: ITLB=True; *iTLBc= (cache_t) {    4096, -2,  32}; break; //code TLB: 4 KByte pages, 32 entries
+            case 0x50: ITLB=True; *iTLBc= (cache_t) {    4096, -2,  64}; break; //code TLB, 4K and 4M or 2M pages, fully, 64 entries
+            case 0x51: ITLB=True; *iTLBc= (cache_t) {    4096, -2, 128}; break; //code TLB, 4K and 4M or 2M pages, fully, 128 entries
+            case 0x52: ITLB=True; *iTLBc= (cache_t) {    4096, -2, 256}; break; //code TLB, 4K and 4M or 2M pages, fully, 256 entries
+            case 0x55: break;//ITLB=True; *iTLBc= (cache_t) { 2097152, -1,   7}; break; //code TLB, 2M or 4M, fully, 7 entries
+            case 0x56: break;//DTLB=True; *dTLBc= (cache_t) { 4194304,  4,  16}; break; //data TLB0 //L0 data TLB, 4M pages, 4 ways, 16 entries
+            case 0x57: DTLB=True; *dTLBc= (cache_t) {    4096,  4,  16}; break; //L0 data TLB, 4K pages, 4 ways, 16 entries
+            case 0x59: DTLB=True; *dTLBc= (cache_t) {    4096, -1,  16}; break; //L0 data TLB, 4K pages, fully, 16 entries
+            case 0x5a: break;//DTLB=True; *dTLBc= (cache_t) { 2097152,  4,  32}; break; //L0 data TLB, 2M or 4M, 4 ways, 32 entries
+            case 0x5b: DTLB=True; *dTLBc= (cache_t) {    4096, -2,  64}; break; //data TLB, 4K and 4M pages, fully, 64 entries
+            case 0x5c: DTLB=True; *dTLBc= (cache_t) {    4096, -2, 128}; break; //data TLB, 4K and 4M pages, fully, 128 entries
+            case 0x5d: DTLB=True; *dTLBc= (cache_t) {    4096, -2, 256}; break; //data TLB, 4K and 4M pages, fully, 256 entries
+            case 0x61: ITLB=True; *iTLBc= (cache_t) {    4096, -1,  48}; break;
+            case 0x63: break;//DTLB=True; *dTLBc= (cache_t) {1073741824,4,   4}; break;
+            case 0x76: break;//ITLB=True; *iTLBc= (cache_t) { 2097152, -1,   8}; break; //code TLB, 2M/4M pages, fully, 8 entries
+            case 0xa0: DTLB=True; *dTLBc= (cache_t) {    4096, -1,  32}; break; //DTLB: 4k pages, fully associative, 32 entries
+            case 0xb0: ITLB=True; *iTLBc= (cache_t) {    4096,  4, 128}; break;
+            case 0xb1: break;//ITLB=True; *iTLBc= (cache_t) { 2097152,  4,   8}; break; //Instruction TLB: 2M pages, 4-way, 8 entries or 4M pages, 4-way, 4 entries
+            case 0xb2: ITLB=True; *iTLBc= (cache_t) {    4096,  4,  64}; break;
+            case 0xb3: DTLB=True; *dTLBc= (cache_t) {    4096,  4, 128}; break;
+            case 0xb4: DTLB=True; *dTLBc= (cache_t) {    4096,  4, 256}; break; //Data TLB1: 4 KByte pages, 4-way associative, 256 entries
+            case 0xb5: ITLB=True; *iTLBc= (cache_t) {    4096,  8,  64}; break;
+            case 0xb6: ITLB=True; *iTLBc= (cache_t) {    4096,  8, 128}; break;
+            case 0xba: DTLB=True; *iTLBc= (cache_t) {    4096,  4,  64}; break; //Data TLB1: 4 KByte pages, 4-way associative, 64 entries
+            case 0xc0: DTLB=True; *iTLBc= (cache_t) {    4096,  4,  64}; break; //data TLB, 4K and 4M pages, 4 ways, 8 entries
+            case 0xc1: L2TLB=True;*L2TLBc=(cache_t) {    4096,  8,1024}; break; //Shared 2nd-Level TLB: 4 KByte/2MByte pages, 8-way associative, 1024 entries
+            case 0xc2: DTLB=True; *dTLBc= (cache_t) {    4096,  4,  16}; break; //DTLB: 4 KByte/2 MByte pages, 4-way associative, 16 entries
+            case 0xca: L2TLB=True;*L2TLBc=(cache_t) {    4096,  4, 512}; break; //Shared 2nd-Level TLB: 4 KByte pages, 4-way associative, 512 entries
+        }
+    }
+
+    
+    
+    /* Do CPU caches */
    for (i = 0; i < 16; i++) {
 
       switch (info[i]) {
@@ -106,18 +156,21 @@ Int Intel_cache_info(Int level, cache_t* I1c, cache_t* D1c, cache_t* LLc)
       case 0x0:       /* ignore zeros */
           break;
           
-      /* TLB info, ignore */
-      case 0x01: case 0x02: case 0x03: case 0x04: case 0x05:
-      case 0x0b:
-      case 0x4f: case 0x50: case 0x51: case 0x52: case 0x55:
-      case 0x56: case 0x57: case 0x59:
-      case 0x5a: case 0x5b: case 0x5c: case 0x5d:
-      case 0x76:
-      case 0xb0: case 0xb1: case 0xb2:
-      case 0xb3: case 0xb4: case 0xba: case 0xc0:
-      case 0xca:
-          break;      
+      /* TLB info ignore */
+          case 0x01:   case 0x02: case 0x03: case 0x04: case 0x05:
+          case 0x0b:
+          case 0x4f:
+          case 0x50: case 0x51: case 0x52: case 0x55: case 0x57: case 0x59: case 0x5a:
+          case 0x5b: case 0x5c: case 0x5d:
+          case 0x61: case 0x63:
+          case 0x76:
+          case 0xa0:
+          case 0xb0:case 0xb1:
+          case 0xb2:case 0xb3:case 0xb4:case 0xb5:case 0xb6:case 0xba:
+          case 0xc0: case 0xc1: case 0xc2:           case 0xca:
+              break;
 
+              
       case 0x06: *I1c = (cache_t) {  8, 4, 32 }; break;
       case 0x08: *I1c = (cache_t) { 16, 4, 32 }; break;
       case 0x09: *I1c = (cache_t) { 32, 4, 64 }; break;
@@ -302,16 +355,39 @@ Int Intel_cache_info(Int level, cache_t* I1c, cache_t* D1c, cache_t* LLc)
       }
    }
 
-   /* If we found a L3 cache, throw away the L2 data and use the L3's instead. */
-   if (L3_found) {
-      VG_(dmsg)("warning: L3 cache found, using its data for the LL simulation.\n");
-      *LLc = L3c;
-      L2_found = True;
-   }
+    
+    /* If we found a L3 cache, throw away the L2 data and use the L3's instead. */
+    if (L3_found) {
+        VG_(dmsg)("warning: L3 cache found, using its data for the LL simulation.\n");
+        *L2c=*LLc;
+        *LLc = L3c;
+        L2_found = True;
+    }
+    
+    /* If we found a L3 cache, throw away the L2 data and use the L3's instead. */
+    /*if (L3_found) {
+        VG_(dmsg)("warning: L3 cache found, using its data for the LL simulation.\n");
+        *L2c=*LLc;
+        *LLc = L3c;
+        L2_found = True;
+    }*/
 
    if (!L2_found)
       VG_(dmsg)("warning: L2 cache not installed, ignore LL results.\n");
-
+    
+    /*if(ITLB)
+        VG_(dmsg)("ITLB:\n %d page size, %d assoc, %d entries\n",iTLBc->size,iTLBc->assoc,iTLBc->line_size);
+    else
+        VG_(dmsg)("ITLB was not detected\n");
+    if(DTLB)
+        VG_(dmsg)("DTLB:\n %d page size, %d assoc, %d entries\n",dTLBc->size,dTLBc->assoc,dTLBc->line_size);
+    else
+        VG_(dmsg)("DTLB was not detected\n");
+    if(L2TLB)
+        VG_(dmsg)("L2TLB:\n %d page size, %d assoc, %d entries\n",L2TLBc->size,L2TLBc->assoc,L2TLBc->line_size);
+    else
+        VG_(dmsg)("L2TLB was not detected\n");
+    */
    return 0;
 }
 
@@ -415,7 +491,7 @@ Int AMD_cache_info(cache_t* I1c, cache_t* D1c, cache_t* LLc)
 }
 
 static 
-Int get_caches_from_CPUID(cache_t* I1c, cache_t* D1c, cache_t* LLc)
+Int get_caches_from_CPUID(cache_t* I1c, cache_t* D1c,cache_t* L2c, cache_t* LLc, cache_t* iTLBc, cache_t* dTLBc, cache_t* L2TLBc)
 {
    Int  level, ret;
    Char vendor_id[13];
@@ -436,8 +512,9 @@ Int get_caches_from_CPUID(cache_t* I1c, cache_t* D1c, cache_t* LLc)
 
    /* Only handling Intel and AMD chips... no Cyrix, Transmeta, etc */
    if (0 == VG_(strcmp)(vendor_id, "GenuineIntel")) {
-      ret = Intel_cache_info(level, I1c, D1c, LLc);
-
+      ret = Intel_cache_info(level, I1c, D1c, L2c, LLc, iTLBc, dTLBc, L2TLBc);
+	 //VG_(dmsg)("cpuid:L2c.size=%d\n", L2c->size);
+	 //VG_(dmsg)("cpuid:LLc.size=%d\n", LLc->size);
    } else if (0 == VG_(strcmp)(vendor_id, "AuthenticAMD")) {
       ret = AMD_cache_info(I1c, D1c, LLc);
 
@@ -462,6 +539,7 @@ Int get_caches_from_CPUID(cache_t* I1c, cache_t* D1c, cache_t* LLc)
    /* Successful!  Convert sizes from KB to bytes */
    I1c->size *= 1024;
    D1c->size *= 1024;
+   L2c->size *= 1024;
    LLc->size *= 1024;
 
    /* If the LL cache config isn't something the simulation functions
@@ -517,11 +595,33 @@ Int get_caches_from_CPUID(cache_t* I1c, cache_t* D1c, cache_t* LLc)
       }
    }
 
+   if (L2c->size > 0 && L2c->assoc > 0 && L2c->line_size > 0) {
+      Long nSets = (Long)L2c->size / (Long)(L2c->line_size * L2c->assoc);
+      if (/* stay sane */
+          nSets >= 4
+          /* nSets is not a power of 2 */
+          && VG_(log2_64)( (ULong)nSets ) == -1
+          /* nSets is 50% above a power of 2 */
+          && VG_(log2_64)( (ULong)((2 * nSets) / (Long)3) ) != -1
+          /* associativity can be increased by exactly 50% */
+          && (L2c->assoc % 2) == 0
+         ) {
+         /* # sets is 1.5 * a power of two, but the associativity is
+            even, so we can increase that up by 50% and implicitly
+            scale the # sets down accordingly. */
+         Int new_assoc = L2c->assoc + (L2c->assoc / 2);
+         VG_(dmsg)("warning: pretending that L2 cache has associativity"
+                   " %d instead of actual %d\n", new_assoc, L2c->assoc);
+         L2c->assoc = new_assoc;
+      }
+   }
+
+
    return ret;
 }
 
 
-void VG_(configure_caches)(cache_t* I1c, cache_t* D1c, cache_t* LLc,
+void VG_(configure_caches)(cache_t* I1c, cache_t* D1c,cache_t* L2c, cache_t* LLc, cache_t* iTLBc, cache_t* dTLBc, cache_t* L2TLBc,
                            Bool all_caches_clo_defined)
 {
    Int res;
@@ -529,10 +629,14 @@ void VG_(configure_caches)(cache_t* I1c, cache_t* D1c, cache_t* LLc,
    // Set caches to default.
    *I1c = (cache_t) {  65536, 2, 64 };
    *D1c = (cache_t) {  65536, 2, 64 };
+   *L2c = (cache_t) { 262144, 8, 64 };
    *LLc = (cache_t) { 262144, 8, 64 };
-
+   *iTLBc  =  (cache_t) { 4096, 4,  64 };
+   *dTLBc  =  (cache_t) { 4096, 4,  64 };
+    *L2TLBc = (cache_t) { 4096, 4, 512 };
+    
    // Then replace with any info we can get from CPUID.
-   res = get_caches_from_CPUID(I1c, D1c, LLc);
+   res = get_caches_from_CPUID(I1c, D1c, L2c, LLc, iTLBc, dTLBc, L2TLBc);
 
    // Warn if CPUID failed and config not completely specified from cmd line.
    if (res != 0 && !all_caches_clo_defined) {

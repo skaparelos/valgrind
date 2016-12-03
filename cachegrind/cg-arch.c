@@ -38,6 +38,8 @@
 
 #include "cg_arch.h"
 
+Bool TLB_bool=False, itlb_bool=False, dtlb_bool=False, l2tlb_bool=False;
+
 // Checks cache config is ok.  Returns NULL if ok, or a pointer to an error
 // string otherwise.
 static Char* check_cache(cache_t* cache)
@@ -94,11 +96,13 @@ static void parse_cache_opt ( cache_t* cache, Char* opt, Char* optval )
    if (cache->assoc     != i2) goto overflow;
    if (cache->line_size != i3) goto overflow;
 
-   checkRes = check_cache(cache);
-   if (checkRes) {
-      VG_(fmsg)("%s", checkRes);
-      goto bad;
-   }
+    if(!TLB_bool){
+        checkRes = check_cache(cache);
+        if (checkRes) {
+            VG_(fmsg)("%s", checkRes);
+            goto bad;
+        }
+    }
 
    return;
 
@@ -114,7 +118,11 @@ static void parse_cache_opt ( cache_t* cache, Char* opt, Char* optval )
 Bool VG_(str_clo_cache_opt)(Char *arg,
                             cache_t* clo_I1c,
                             cache_t* clo_D1c,
-                            cache_t* clo_LLc)
+                            cache_t* clo_L2c,
+                            cache_t* clo_LLc,
+                            cache_t* clo_iTLBc,
+                            cache_t* clo_dTLBc,
+                            cache_t* clo_L2TLBc)
 {
    Char* tmp_str;
 
@@ -124,11 +132,28 @@ Bool VG_(str_clo_cache_opt)(Char *arg,
    } else if VG_STR_CLO(arg, "--D1", tmp_str) {
       parse_cache_opt(clo_D1c, arg, tmp_str);
       return True;
-   } else if (VG_STR_CLO(arg, "--L2", tmp_str) || // for backwards compatibility
-              VG_STR_CLO(arg, "--LL", tmp_str)) {
+   } else if (VG_STR_CLO(arg,"--L2", tmp_str)){
+      parse_cache_opt(clo_L2c, arg, tmp_str);
+      return True;
+   }else if (VG_STR_CLO(arg, "--LL", tmp_str)) {
       parse_cache_opt(clo_LLc, arg, tmp_str);
       return True;
-   } else
+   } else if (VG_STR_CLO(arg,"--iTLB", tmp_str)) {
+       TLB_bool=True;
+       parse_cache_opt(clo_iTLBc, arg, tmp_str);
+       itlb_bool=True;
+       return True;
+   } else if (VG_STR_CLO(arg,"--dTLB", tmp_str)) {
+       TLB_bool=True;
+       parse_cache_opt(clo_dTLBc, arg, tmp_str);
+       dtlb_bool=True;
+       return True;
+   } else if (VG_STR_CLO(arg,"--L2TLB", tmp_str)) {
+       TLB_bool=True;
+       parse_cache_opt(clo_L2TLBc, arg, tmp_str);
+       l2tlb_bool=True;
+       return True;
+   }else
       return False;
 }
 
@@ -159,41 +184,67 @@ static void check_cache_or_override(Char* desc, cache_t* c, Bool clo_redefined)
 
 void VG_(post_clo_init_configure_caches)(cache_t* I1c,
                                          cache_t* D1c,
+                                         cache_t *L2c,
                                          cache_t* LLc,
+                                         cache_t* iTLBc,
+                                         cache_t* dTLBc,
+                                         cache_t* L2TLBc,
                                          cache_t* clo_I1c,
                                          cache_t* clo_D1c,
-                                         cache_t* clo_LLc)
+                                         cache_t* clo_L2c,
+                                         cache_t* clo_LLc,
+                                         cache_t* clo_iTLBc,
+                                         cache_t* clo_dTLBc,
+                                         cache_t* clo_L2TLBc)
 {
 #define DEFINED(L)   (-1 != L->size  || -1 != L->assoc || -1 != L->line_size)
-
    // Count how many were defined on the command line.
    Bool all_caches_clo_defined =
-      (DEFINED(clo_I1c) &&
-       DEFINED(clo_D1c) &&
-       DEFINED(clo_LLc));
+      (DEFINED(clo_I1c)  &&
+       DEFINED(clo_D1c)  &&
+	   DEFINED(clo_L2c)  &&
+       DEFINED(clo_LLc)  );
+       //DEFINED(clo_iTLBc)&&
+       //DEFINED(clo_dTLBc)&&
+       //DEFINED(clo_L2TLBc) );
 
    // Set the cache config (using auto-detection, if supported by the
    // architecture).
-   VG_(configure_caches)( I1c, D1c, LLc, all_caches_clo_defined );
+   VG_(configure_caches)( I1c, D1c,L2c, LLc, iTLBc, dTLBc, L2TLBc, all_caches_clo_defined );
 
    // Check the default/auto-detected values.
    // Allow the user to override invalid auto-detected caches
    // with command line.
    check_cache_or_override ("I1", I1c, DEFINED(clo_I1c));
    check_cache_or_override ("D1", D1c, DEFINED(clo_D1c));
+   check_cache_or_override ("L2", L2c, DEFINED(clo_L2c));
    check_cache_or_override ("LL", LLc, DEFINED(clo_LLc));
-
+    
+   //don't check tlb here, because it is not line with the CPU cache constraints
+   //check_cache_or_override ("iTLB", iTLBc, DEFINED(clo_iTLBc));
+   //check_cache_or_override ("dTLB", dTLBc, DEFINED(clo_dTLBc));
+   //check_cache_or_override ("L2TLB", L2TLBc, DEFINED(clo_L2TLBc));
+    
    // Then replace with any defined on the command line.  (Already checked in
    // VG(parse_clo_cache_opt)().)
    if (DEFINED(clo_I1c)) { *I1c = *clo_I1c; }
    if (DEFINED(clo_D1c)) { *D1c = *clo_D1c; }
+   if (DEFINED(clo_L2c)) { *L2c = *clo_L2c; }
    if (DEFINED(clo_LLc)) { *LLc = *clo_LLc; }
-
+   if (itlb_bool) { *iTLBc = *clo_iTLBc;   }
+   if (dtlb_bool) { *dTLBc = *clo_dTLBc;   }
+   if (l2tlb_bool){ *L2TLBc = *clo_L2TLBc; }
+    
    if (VG_(clo_verbosity) >= 2) {
       VG_(umsg)("Cache configuration used:\n");
       umsg_cache_img ("I1", I1c);
       umsg_cache_img ("D1", D1c);
+      umsg_cache_img ("L2", L2c);
       umsg_cache_img ("LL", LLc);
+      //don't print TLB here
+      //umsg_cache_img ("iTLB", iTLBc);
+      //umsg_cache_img ("dTLB", dTLBc);
+      //umsg_cache_img ("L2TLB", L2TLBc);
    }
 #undef DEFINED
 }
@@ -203,6 +254,10 @@ void VG_(print_cache_clo_opts)()
    VG_(printf)(
 "    --I1=<size>,<assoc>,<line_size>  set I1 cache manually\n"
 "    --D1=<size>,<assoc>,<line_size>  set D1 cache manually\n"
+"    --L2=<size>,<assoc>,<line_size>  set L2 cache manually\n"
 "    --LL=<size>,<assoc>,<line_size>  set LL cache manually\n"
+"    --iTLB=<page_size>,<assoc>,<entries>  set iTLB cache manually\n"
+"    --dTLB=<page_size>,<assoc>,<entries>  set dTLB cache manually\n"
+"    --L2TLB=<page_size>,<assoc>,<entries> set L2TLB cache manually\n"
                );
 }

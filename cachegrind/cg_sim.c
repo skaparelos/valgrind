@@ -54,7 +54,6 @@ typedef struct {
 static void cachesim_initcache(cache_t config, cache_t2* c)
 {
    Int i;
-
    c->size      = config.size;
    c->assoc     = config.assoc;
    c->line_size = config.line_size;
@@ -96,7 +95,7 @@ static void cachesim_##L##_initcache(cache_t config)                        \
 /* bigger than its usual limit.  Inlining gains around 5--10% speedup. */   \
 __attribute__((always_inline))                                              \
 static __inline__                                                           \
-void cachesim_##L##_doref(Addr a, UChar size, ULong* m1, ULong *mL)         \
+void cachesim_##L##_doref(Addr a, UChar size, ULong* m1, ULong *m2, ULong *mL)\
 {                                                                           \
    UInt  set1 = ( a         >> L.line_size_bits) & (L.sets_min_1);          \
    UInt  set2 = ((a+size-1) >> L.line_size_bits) & (L.sets_min_1);          \
@@ -189,8 +188,18 @@ miss_treatment:                                                             \
 }
 
 CACHESIM(LL, (*mL)++ );
-CACHESIM(I1, { (*m1)++; cachesim_LL_doref(a, size, m1, mL); } );
-CACHESIM(D1, { (*m1)++; cachesim_LL_doref(a, size, m1, mL); } );
+//CACHESIM(LL, {(*m2)++; (*mL)++;} );
+CACHESIM(L2, { (*m2)++; cachesim_LL_doref(a, size, m1, m2, mL); } );
+CACHESIM(I1, { (*m1)++; cachesim_L2_doref(a, size, m1, m2, mL); } );
+CACHESIM(D1, { (*m1)++; cachesim_L2_doref(a, size, m1, m2, mL); } );
+
+
+/* Initial: 
+CACHESIM(LL, (*mL)++ );
+CACHESIM(L2, (*m2)++ );
+CACHESIM(I1, { (*m1)++; cachesim_LL_doref(a, size, m1, m2, mL); } );
+CACHESIM(D1, { (*m1)++; cachesim_LL_doref(a, size, m1, m2, mL); } );
+*/
 
 /*--------------------------------------------------------------------*/
 /*--- end                                                 cg_sim.c ---*/

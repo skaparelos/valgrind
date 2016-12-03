@@ -45,8 +45,8 @@ typedef struct {
 #define UNDEFINED_CACHE     { -1, -1, -1 }
 
 // Gives the auto-detected configuration of I1, D1 and LL caches.  They get
-// overridden by any cache configurations specified on the command line.
-void VG_(configure_caches)(cache_t* I1c, cache_t* D1c, cache_t* LLc,
+// overridden by any cache csonfigurations specified on the command line.
+void VG_(configure_caches)(cache_t* I1c, cache_t* D1c,cache_t* L2c, cache_t* LLc, cache_t* iTLBc, cache_t* dTLBc, cache_t* L2TLBc,
                            Bool all_caches_clo_defined);
 
 // If arg is a command line option configuring I1 or D1 or LL cache,
@@ -55,7 +55,11 @@ void VG_(configure_caches)(cache_t* I1c, cache_t* D1c, cache_t* LLc,
 Bool VG_(str_clo_cache_opt)(Char *arg,
                             cache_t* clo_I1c,
                             cache_t* clo_D1c,
-                            cache_t* clo_LLc);
+					        cache_t* clo_L2c,
+                            cache_t* clo_LLc,
+                            cache_t* clo_iTLBc,
+                            cache_t* clo_dTLBc,
+                            cache_t* clo_L2TLBc);
 
 // Checks the correctness of the auto-detected caches.
 // If a cache has been configured by command line options, it
@@ -65,10 +69,18 @@ Bool VG_(str_clo_cache_opt)(Char *arg,
 // will be replaced by a command line defined cache.
 void VG_(post_clo_init_configure_caches)(cache_t* I1c,
                                          cache_t* D1c,
+                                         cache_t* L2c,
                                          cache_t* LLc,
+                                         cache_t* iTLBc,
+                                         cache_t* dTLBc,
+                                         cache_t* L2TLBc,
                                          cache_t* clo_I1c,
                                          cache_t* clo_D1c,
-                                         cache_t* clo_LLc);
+                                         cache_t* clo_L2c,
+                                         cache_t* clo_LLc,
+                                         cache_t* clo_iTLBc,
+                                         cache_t* clo_dTLBc,
+                                         cache_t* clo_L2TLBc);
 
 void VG_(print_cache_clo_opts)(void);
 

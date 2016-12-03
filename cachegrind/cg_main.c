@@ -4,6 +4,8 @@
 /*---                                                    cg_main.c ---*/
 /*--------------------------------------------------------------------*/
 
+/* Edited */
+
 /*
    This file is part of Cachegrind, a Valgrind tool for cache
    profiling programs.
@@ -49,6 +51,8 @@
 #include "cg_arch.h"
 #include "cg_sim.c"
 #include "cg_branchpred.c"
+#include "cg_tlb.c"
+
 
 /*------------------------------------------------------------*/
 /*--- Constants                                            ---*/
@@ -69,6 +73,10 @@ static Bool  clo_cache_sim  = True;  /* do cache simulation? */
 static Bool  clo_branch_sim = False; /* do branch simulation? */
 static Char* clo_cachegrind_out_file = "cachegrind.out.%p";
 
+/*-TLB-*/
+//static Bool clo_tlb_sim=True;           /* Simulate TLB     */
+//static Bool clo_tlb_sim_pages=False;    /* Simulate Pages   */
+
 /*------------------------------------------------------------*/
 /*--- Cachesim configuration                               ---*/
 /*------------------------------------------------------------*/
@@ -83,9 +91,17 @@ typedef
    struct {
       ULong a;  /* total # memory accesses of this kind */
       ULong m1; /* misses in the first level cache */
-      ULong mL; /* misses in the second level cache */
+      ULong m2; /* misses in the second level cache */	 
+      ULong mL; /* misses in the third level cache */
    }
    CacheCC;
+
+typedef
+    struct {
+        ULong a;  /* total # memory accesses of this kind */
+        ULong t1; /* Misses in the first level TLB */
+        ULong t2; /* Misses in the second level TLB */
+}TLBCC;
 
 typedef
    struct {
@@ -110,9 +126,15 @@ CodeLoc;
 
 typedef struct {
    CodeLoc  loc; /* Source location that these counts pertain to */
+    
    CacheCC  Ir;  /* Insn read counts */
    CacheCC  Dr;  /* Data read counts */
    CacheCC  Dw;  /* Data write/modify counts */
+    
+    TLBCC   t_Ir; /* TLB insn read counts */
+    TLBCC   t_Dr; /* TLB data read counts */
+    TLBCC   t_Dw; /* TLB data write/modify counts */
+    
    BranchCC Bc;  /* Conditional branch counts */
    BranchCC Bi;  /* Indirect branch counts */
 } LineCC;
@@ -274,13 +296,25 @@ static LineCC* get_lineCC(Addr origAddr)
       lineCC->loc.line = loc.line;
       lineCC->Ir.a     = 0;
       lineCC->Ir.m1    = 0;
+      lineCC->Ir.m2    = 0;
       lineCC->Ir.mL    = 0;
+       lineCC->t_Ir.a  = 0;
+       lineCC->t_Ir.t1 = 0;
+       lineCC->t_Ir.t2 = 0;
       lineCC->Dr.a     = 0;
       lineCC->Dr.m1    = 0;
+      lineCC->Dr.m2    = 0;
       lineCC->Dr.mL    = 0;
+       lineCC->t_Dr.a  = 0;
+       lineCC->t_Dr.t1 = 0;
+       lineCC->t_Dr.t2 = 0;
       lineCC->Dw.a     = 0;
       lineCC->Dw.m1    = 0;
+      lineCC->Dw.m2    = 0;
       lineCC->Dw.mL    = 0;
+       lineCC->t_Dw.a  = 0;
+       lineCC->t_Dw.t1 = 0;
+       lineCC->t_Dw.t2 = 0;
       lineCC->Bc.b     = 0;
       lineCC->Bc.mp    = 0;
       lineCC->Bi.b     = 0;
@@ -319,16 +353,22 @@ void log_3I(InstrInfo* n, InstrInfo* n2, InstrInfo* n3)
    n3->parent->Ir.a++;
 }
 
+
 static VG_REGPARM(1)
 void log_1I_0D_cache_access(InstrInfo* n)
 {
    //VG_(printf)("1I_0D :  CCaddr=0x%010lx,  iaddr=0x%010lx,  isize=%lu\n",
    //             n, n->instr_addr, n->instr_len);
    cachesim_I1_doref(n->instr_addr, n->instr_len, 
-                     &n->parent->Ir.m1, &n->parent->Ir.mL);
+                     &n->parent->Ir.m1, &n->parent->Ir.m2, &n->parent->Ir.mL);
    n->parent->Ir.a++;
+
+   reference_address(n->instr_addr, 0, &n->parent->t_Ir.t1, &n->parent->t_Ir.t2);
+   n->parent->t_Ir.a++;
 }
 
+
+//2 Instruction, 0 data
 static VG_REGPARM(2)
 void log_2I_0D_cache_access(InstrInfo* n, InstrInfo* n2)
 {
@@ -336,14 +376,26 @@ void log_2I_0D_cache_access(InstrInfo* n, InstrInfo* n2)
    //            "        CC2addr=0x%010lx, i2addr=0x%010lx, i2size=%lu\n",
    //            n,  n->instr_addr,  n->instr_len,
    //            n2, n2->instr_addr, n2->instr_len);
+    
    cachesim_I1_doref(n->instr_addr, n->instr_len, 
-                     &n->parent->Ir.m1, &n->parent->Ir.mL);
+                     &n->parent->Ir.m1, &n->parent->Ir.m2,&n->parent->Ir.mL);
    n->parent->Ir.a++;
+    
+   reference_address(n->instr_addr, 0, &n->parent->t_Ir.t1, &n->parent->t_Ir.t2);
+   n->parent->t_Ir.a++;
+    
+    
    cachesim_I1_doref(n2->instr_addr, n2->instr_len, 
-                     &n2->parent->Ir.m1, &n2->parent->Ir.mL);
+                     &n2->parent->Ir.m1,&n2->parent->Ir.m2, &n2->parent->Ir.mL);
    n2->parent->Ir.a++;
+    
+   reference_address(n2->instr_addr, 0, &n2->parent->t_Ir.t1, &n2->parent->t_Ir.t2);
+   n2->parent->t_Ir.a++;
+    
+   
 }
 
+//3Instruction, 0 data
 static VG_REGPARM(3)
 void log_3I_0D_cache_access(InstrInfo* n, InstrInfo* n2, InstrInfo* n3)
 {
@@ -353,17 +405,34 @@ void log_3I_0D_cache_access(InstrInfo* n, InstrInfo* n2, InstrInfo* n3)
    //            n,  n->instr_addr,  n->instr_len,
    //            n2, n2->instr_addr, n2->instr_len,
    //            n3, n3->instr_addr, n3->instr_len);
+    
    cachesim_I1_doref(n->instr_addr, n->instr_len, 
-                     &n->parent->Ir.m1, &n->parent->Ir.mL);
+                     &n->parent->Ir.m1,&n->parent->Ir.m2, &n->parent->Ir.mL);
    n->parent->Ir.a++;
-   cachesim_I1_doref(n2->instr_addr, n2->instr_len, 
-                     &n2->parent->Ir.m1, &n2->parent->Ir.mL);
+    
+   reference_address(n->instr_addr, 0, &n->parent->t_Ir.t1, &n->parent->t_Ir.t2);
+   n->parent->t_Ir.a++;
+    
+    
+   cachesim_I1_doref(n2->instr_addr, n2->instr_len,
+                     &n2->parent->Ir.m1,&n2->parent->Ir.m2, &n2->parent->Ir.mL);
    n2->parent->Ir.a++;
+   
+   reference_address(n2->instr_addr, 0, &n2->parent->t_Ir.t1, &n2->parent->t_Ir.t2);
+   n2->parent->t_Ir.a++;
+    
+
    cachesim_I1_doref(n3->instr_addr, n3->instr_len, 
-                     &n3->parent->Ir.m1, &n3->parent->Ir.mL);
+                     &n3->parent->Ir.m1,&n3->parent->Ir.m2, &n3->parent->Ir.mL);
    n3->parent->Ir.a++;
+   
+   reference_address(n3->instr_addr, 0, &n3->parent->t_Ir.t1, &n3->parent->t_Ir.t2);
+   n3->parent->t_Ir.a++;
+    
+   
 }
 
+//1 Instruction, 1 Data read
 static VG_REGPARM(3)
 void log_1I_1Dr_cache_access(InstrInfo* n, Addr data_addr, Word data_size)
 {
@@ -371,12 +440,21 @@ void log_1I_1Dr_cache_access(InstrInfo* n, Addr data_addr, Word data_size)
    //            "                               daddr=0x%010lx,  dsize=%lu\n",
    //            n, n->instr_addr, n->instr_len, data_addr, data_size);
    cachesim_I1_doref(n->instr_addr, n->instr_len, 
-                     &n->parent->Ir.m1, &n->parent->Ir.mL);
+                     &n->parent->Ir.m1,&n->parent->Ir.m2, &n->parent->Ir.mL);
    n->parent->Ir.a++;
-
+   
+   reference_address(n->instr_addr, 0, &n->parent->t_Ir.t1, &n->parent->t_Ir.t2);
+   n->parent->t_Ir.a++;
+   
+    
    cachesim_D1_doref(data_addr, data_size, 
-                     &n->parent->Dr.m1, &n->parent->Dr.mL);
+                     &n->parent->Dr.m1,&n->parent->Dr.m2, &n->parent->Dr.mL);
    n->parent->Dr.a++;
+   
+   reference_address(data_addr, 1, &n->parent->t_Dr.t1, &n->parent->t_Dr.t2);
+   n->parent->t_Dr.a++;
+    
+
 }
 
 static VG_REGPARM(3)
@@ -386,12 +464,20 @@ void log_1I_1Dw_cache_access(InstrInfo* n, Addr data_addr, Word data_size)
    //            "                               daddr=0x%010lx,  dsize=%lu\n",
    //            n, n->instr_addr, n->instr_len, data_addr, data_size);
    cachesim_I1_doref(n->instr_addr, n->instr_len, 
-                     &n->parent->Ir.m1, &n->parent->Ir.mL);
+                     &n->parent->Ir.m1,&n->parent->Ir.m2, &n->parent->Ir.mL);
    n->parent->Ir.a++;
-
+  
+   reference_address(n->instr_addr, 0, &n->parent->t_Ir.t1,&n->parent->t_Ir.t2);
+   n->parent->t_Ir.a++;
+    
+    
    cachesim_D1_doref(data_addr, data_size, 
-                     &n->parent->Dw.m1, &n->parent->Dw.mL);
+                     &n->parent->Dw.m1,&n->parent->Dw.m2, &n->parent->Dw.mL);
    n->parent->Dw.a++;
+ 
+   reference_address(data_addr, 1, &n->parent->t_Dw.t1,&n->parent->t_Dw.t2);
+   n->parent->t_Dw.a++;
+    
 }
 
 static VG_REGPARM(3)
@@ -400,8 +486,13 @@ void log_0I_1Dr_cache_access(InstrInfo* n, Addr data_addr, Word data_size)
    //VG_(printf)("0I_1Dr:  CCaddr=0x%010lx,  daddr=0x%010lx,  dsize=%lu\n",
    //            n, data_addr, data_size);
    cachesim_D1_doref(data_addr, data_size, 
-                     &n->parent->Dr.m1, &n->parent->Dr.mL);
+                     &n->parent->Dr.m1,&n->parent->Dr.m2, &n->parent->Dr.mL);
    n->parent->Dr.a++;
+   
+   reference_address(data_addr, 1, &n->parent->t_Dr.t1,&n->parent->t_Dr.t2);
+   n->parent->t_Dr.a++;
+    
+   
 }
 
 static VG_REGPARM(3)
@@ -410,8 +501,13 @@ void log_0I_1Dw_cache_access(InstrInfo* n, Addr data_addr, Word data_size)
    //VG_(printf)("0I_1Dw:  CCaddr=0x%010lx,  daddr=0x%010lx,  dsize=%lu\n",
    //            n, data_addr, data_size);
    cachesim_D1_doref(data_addr, data_size, 
-                     &n->parent->Dw.m1, &n->parent->Dw.mL);
+                     &n->parent->Dw.m1,&n->parent->Dw.m2, &n->parent->Dw.mL);
    n->parent->Dw.a++;
+   
+   reference_address(data_addr, 1, &n->parent->t_Dw.t1,&n->parent->t_Dw.t2 );
+   n->parent->t_Dw.a++;
+    
+   
 }
 
 /* For branches, we consult two different predictors, one which
@@ -1240,7 +1336,11 @@ IRSB* cg_instrument ( VgCallbackClosure* closure,
 
 static cache_t clo_I1_cache = UNDEFINED_CACHE;
 static cache_t clo_D1_cache = UNDEFINED_CACHE;
+static cache_t clo_L2_cache = UNDEFINED_CACHE;
 static cache_t clo_LL_cache = UNDEFINED_CACHE;
+static cache_t clo_iTLB_cache = UNDEFINED_CACHE;
+static cache_t clo_dTLB_cache = UNDEFINED_CACHE;
+static cache_t clo_L2TLB_cache= UNDEFINED_CACHE;
 
 /*------------------------------------------------------------*/
 /*--- cg_fini() and related function                       ---*/
@@ -1251,6 +1351,9 @@ static cache_t clo_LL_cache = UNDEFINED_CACHE;
 static CacheCC  Ir_total;
 static CacheCC  Dr_total;
 static CacheCC  Dw_total;
+static TLBCC    t_Ir_total;
+static TLBCC    t_Dr_total;
+static TLBCC    t_Dw_total;
 static BranchCC Bc_total;
 static BranchCC Bi_total;
 
@@ -1284,12 +1387,17 @@ static void fprint_CC_table_and_calc_totals(void)
       VG_(free)(cachegrind_out_file);
    }
 
-   // "desc:" lines (giving I1/D1/LL cache configuration).  The spaces after
+   // "desc:" lines (giving I1/D1/L2/LL cache configuration).  The spaces after
    // the 2nd colon makes cg_annotate's output look nicer.
-   VG_(sprintf)(buf, "desc: I1 cache:         %s\n"
-                     "desc: D1 cache:         %s\n"
-                     "desc: LL cache:         %s\n",
-                     I1.desc_line, D1.desc_line, LL.desc_line);
+   VG_(sprintf)(buf, "desc:    I1 cache:       %s\n"
+                     "desc:    D1 cache:       %s\n"
+                     "desc:    L2 cache:       %s\n"
+                     "desc:    LL cache:       %s\n"
+                     "desc:  iTLB cache:       %s\n"
+                     "desc:  dTLB cache:       %s\n"
+                     "desc: L2TLB cache:       %s\n",
+                     I1.desc_line, D1.desc_line,L2.desc_line, LL.desc_line, TLBc[0].desc_line, TLBc[1].desc_line, TLBc[2].desc_line);
+
    VG_(write)(fd, (void*)buf, VG_(strlen)(buf));
 
    // "cmd:" line
@@ -1308,13 +1416,21 @@ static void fprint_CC_table_and_calc_totals(void)
       }
    }
    // "events:" line
-   if (clo_cache_sim && clo_branch_sim) {
-      VG_(sprintf)(buf, "\nevents: Ir I1mr ILmr Dr D1mr DLmr Dw D1mw DLmw "
+   if (clo_cache_sim && clo_branch_sim && isTLBsim()) {
+      VG_(sprintf)(buf, "\nevents: Ir I1mr I2mr ILmr TIr TI1mr TI2mr Dr D1mr D2mr DLmr TDr TD1mr TD2mr Dw D1mw D2mw DLmw TDw TD1mw TD2mw "
                                   "Bc Bcm Bi Bim\n");
    }
-   else if (clo_cache_sim && !clo_branch_sim) {
-      VG_(sprintf)(buf, "\nevents: Ir I1mr ILmr Dr D1mr DLmr Dw D1mw DLmw "
+   else if (clo_cache_sim && clo_branch_sim && !isTLBsim()){
+      VG_(sprintf)(buf, "\nevents: Ir I1mr I2mr ILmr Dr D1mr D2mr DLmr Dw D1mw D2mw DLmw "
+                    "Bc Bcm Bi Bim\n");
+   }
+   else if (clo_cache_sim && !clo_branch_sim && isTLBsim()) {
+      VG_(sprintf)(buf, "\nevents: Ir I1mr I2mr ILmr TIr TI1mr TI2mr Dr D1mr D2mr DLmr TDr TD1mr TD2mr Dw D1mw D2mw DLmw TDw TD1mw TD2mw "
                                   "\n");
+   }
+   else if (clo_cache_sim && !clo_branch_sim && !isTLBsim()) {
+      VG_(sprintf)(buf, "\nevents: Ir I1mr I2mr ILmr Dr D1mr D2mr DLmr Dw D1mw D2mw DLmw "
+                             "\n");
    }
    else if (!clo_cache_sim && clo_branch_sim) {
       VG_(sprintf)(buf, "\nevents: Ir "
@@ -1354,26 +1470,62 @@ static void fprint_CC_table_and_calc_totals(void)
       }
 
       // Print the LineCC
-      if (clo_cache_sim && clo_branch_sim) {
-         VG_(sprintf)(buf, "%u %llu %llu %llu"
+      if (clo_cache_sim && clo_branch_sim && isTLBsim()) {
+		//VG_(umsg)("edw1\n");
+         VG_(sprintf)(buf, "%u %llu %llu %llu %llu"
                              " %llu %llu %llu"
+                             " %llu %llu %llu %llu"
+                             " %llu %llu %llu"
+                             " %llu %llu %llu %llu"
                              " %llu %llu %llu"
                              " %llu %llu %llu %llu\n",
                             lineCC->loc.line,
-                            lineCC->Ir.a, lineCC->Ir.m1, lineCC->Ir.mL, 
-                            lineCC->Dr.a, lineCC->Dr.m1, lineCC->Dr.mL,
-                            lineCC->Dw.a, lineCC->Dw.m1, lineCC->Dw.mL,
+                            lineCC->Ir.a, lineCC->Ir.m1, lineCC->Ir.m2, lineCC->Ir.mL,
+                            lineCC->t_Ir.a, lineCC->t_Ir.t1, lineCC->t_Ir.t2,
+                            lineCC->Dr.a, lineCC->Dr.m1, lineCC->Dr.m2, lineCC->Dr.mL,
+                            lineCC->t_Dr.a, lineCC->t_Dr.t1, lineCC->t_Dr.t2,
+                            lineCC->Dw.a, lineCC->Dw.m1, lineCC->Dw.m2, lineCC->Dw.mL,
+                            lineCC->t_Dw.a, lineCC->t_Dw.t1, lineCC->t_Dw.t2,
                             lineCC->Bc.b, lineCC->Bc.mp, 
                             lineCC->Bi.b, lineCC->Bi.mp);
       }
-      else if (clo_cache_sim && !clo_branch_sim) {
-         VG_(sprintf)(buf, "%u %llu %llu %llu"
+      else if (clo_cache_sim && clo_branch_sim && !isTLBsim()) {
+          VG_(sprintf)(buf,
+                       "%u %llu %llu %llu %llu"
+                       " %llu %llu %llu %llu"
+                       " %llu %llu %llu %llu"
+                       " %llu %llu %llu %llu\n",
+                       lineCC->loc.line,
+                       lineCC->Ir.a, lineCC->Ir.m1, lineCC->Ir.m2, lineCC->Ir.mL,
+                       lineCC->Dr.a, lineCC->Dr.m1, lineCC->Dr.m2, lineCC->Dr.mL,
+                       lineCC->Dw.a, lineCC->Dw.m1, lineCC->Dw.m2, lineCC->Dw.mL,
+                       lineCC->Bc.b, lineCC->Bc.mp,
+                       lineCC->Bi.b, lineCC->Bi.mp);
+      }
+      else if (clo_cache_sim && !clo_branch_sim && isTLBsim()) {
+         VG_(sprintf)(buf, "%u %llu %llu %llu %llu"
                              " %llu %llu %llu"
+                             " %llu %llu %llu %llu"
+                             " %llu %llu %llu"
+                             " %llu %llu %llu %llu"
                              " %llu %llu %llu\n",
                             lineCC->loc.line,
-                            lineCC->Ir.a, lineCC->Ir.m1, lineCC->Ir.mL, 
-                            lineCC->Dr.a, lineCC->Dr.m1, lineCC->Dr.mL,
-                            lineCC->Dw.a, lineCC->Dw.m1, lineCC->Dw.mL);
+                            lineCC->Ir.a, lineCC->Ir.m1, lineCC->Ir.m2, lineCC->Ir.mL,
+                            lineCC->t_Ir.a, lineCC->t_Ir.t1, lineCC->t_Ir.t2,
+                            lineCC->Dr.a, lineCC->Dr.m1, lineCC->Dr.m2, lineCC->Dr.mL,
+                            lineCC->t_Dr.a, lineCC->t_Dr.t1, lineCC->t_Dr.t2,
+                            lineCC->Dw.a, lineCC->Dw.m1, lineCC->Dw.m2, lineCC->Dw.mL,
+                            lineCC->t_Dw.a, lineCC->t_Dw.t1, lineCC->t_Dw.t2);
+      }
+      else if (clo_cache_sim && !clo_branch_sim && !isTLBsim()) {
+          VG_(sprintf)(buf,
+                       "%u %llu %llu %llu %llu"
+                       " %llu %llu %llu %llu"
+                       " %llu %llu %llu %llu\n",
+                       lineCC->loc.line,
+                       lineCC->Ir.a, lineCC->Ir.m1, lineCC->Ir.m2, lineCC->Ir.mL,
+                       lineCC->Dr.a, lineCC->Dr.m1, lineCC->Dr.m2, lineCC->Dr.mL,
+                       lineCC->Dw.a, lineCC->Dw.m1, lineCC->Dw.m2, lineCC->Dw.mL);
       }
       else if (!clo_cache_sim && clo_branch_sim) {
          VG_(sprintf)(buf, "%u %llu"
@@ -1388,19 +1540,30 @@ static void fprint_CC_table_and_calc_totals(void)
                             lineCC->loc.line,
                             lineCC->Ir.a);
       }
-
       VG_(write)(fd, (void*)buf, VG_(strlen)(buf));
 
       // Update summary stats
       Ir_total.a  += lineCC->Ir.a;
       Ir_total.m1 += lineCC->Ir.m1;
+      Ir_total.m2 += lineCC->Ir.m2;
       Ir_total.mL += lineCC->Ir.mL;
+       t_Ir_total.a  += lineCC->t_Ir.a;
+       t_Ir_total.t1 += lineCC->t_Ir.t1;
+       t_Ir_total.t2 += lineCC->t_Ir.t2;
       Dr_total.a  += lineCC->Dr.a;
       Dr_total.m1 += lineCC->Dr.m1;
+      Dr_total.m2 += lineCC->Dr.m2;
       Dr_total.mL += lineCC->Dr.mL;
+       t_Dr_total.a  += lineCC->t_Dr.a;
+       t_Dr_total.t1 += lineCC->t_Dr.t1;
+       t_Dr_total.t2 += lineCC->t_Dr.t2;
       Dw_total.a  += lineCC->Dw.a;
       Dw_total.m1 += lineCC->Dw.m1;
+      Dw_total.m2 += lineCC->Dw.m2;
       Dw_total.mL += lineCC->Dw.mL;
+       t_Dw_total.a  += lineCC->t_Dw.a;
+       t_Dw_total.t1 += lineCC->t_Dw.t1;
+       t_Dw_total.t2 += lineCC->t_Dw.t2;
       Bc_total.b  += lineCC->Bc.b;
       Bc_total.mp += lineCC->Bc.mp;
       Bi_total.b  += lineCC->Bi.b;
@@ -1413,24 +1576,36 @@ static void fprint_CC_table_and_calc_totals(void)
    // during traversal.  */
    if (clo_cache_sim && clo_branch_sim) {
       VG_(sprintf)(buf, "summary:"
+                        " %llu %llu %llu %llu"
                         " %llu %llu %llu"
+                        " %llu %llu %llu %llu"
                         " %llu %llu %llu"
+                        " %llu %llu %llu %llu"
                         " %llu %llu %llu"
                         " %llu %llu %llu %llu\n", 
-                        Ir_total.a, Ir_total.m1, Ir_total.mL,
-                        Dr_total.a, Dr_total.m1, Dr_total.mL,
-                        Dw_total.a, Dw_total.m1, Dw_total.mL,
+                        Ir_total.a, Ir_total.m1, Ir_total.m2, Ir_total.mL,
+                        t_Ir_total.a, t_Ir_total.t1, t_Ir_total.t2,
+                        Dr_total.a, Dr_total.m1, Dr_total.m2, Dr_total.mL,
+                        t_Dr_total.a, t_Dr_total.t1, t_Dr_total.t2,
+                        Dw_total.a, Dw_total.m1, Dw_total.m2, Dw_total.mL,
+                        t_Dw_total.a, t_Dw_total.t1, t_Dw_total.t2,
                         Bc_total.b, Bc_total.mp, 
                         Bi_total.b, Bi_total.mp);
    }
    else if (clo_cache_sim && !clo_branch_sim) {
       VG_(sprintf)(buf, "summary:"
+                        " %llu %llu %llu %llu"
                         " %llu %llu %llu"
+                        " %llu %llu %llu %llu"
                         " %llu %llu %llu"
+                        " %llu %llu %llu %llu"
                         " %llu %llu %llu\n",
-                        Ir_total.a, Ir_total.m1, Ir_total.mL,
-                        Dr_total.a, Dr_total.m1, Dr_total.mL,
-                        Dw_total.a, Dw_total.m1, Dw_total.mL);
+                        Ir_total.a, Ir_total.m1, Ir_total.m2, Ir_total.mL,
+                        t_Ir_total.a, t_Ir_total.t1, t_Ir_total.t2,
+                        Dr_total.a, Dr_total.m1, Dr_total.m2, Dr_total.mL,
+                        t_Dr_total.a, t_Dr_total.t1, t_Dr_total.t2,
+                        Dw_total.a, Dw_total.m1, Dw_total.m2, Dw_total.mL,
+                        t_Dw_total.a, t_Dw_total.t1, t_Dw_total.t2);
    }
    else if (!clo_cache_sim && clo_branch_sim) {
       VG_(sprintf)(buf, "summary:"
@@ -1469,6 +1644,8 @@ static void cg_fini(Int exitcode)
    BranchCC B_total;
    ULong LL_total_m, LL_total_mr, LL_total_mw,
          LL_total, LL_total_r, LL_total_w;
+   ULong L2_total_m, L2_total_mr, L2_total_mw,
+         L2_total, L2_total_r, L2_total_w;
    Int l1, l2, l3;
 
    fprint_CC_table_and_calc_totals();
@@ -1495,11 +1672,15 @@ static void cg_fini(Int exitcode)
       miss numbers */
    if (clo_cache_sim) {
       VG_(umsg)(fmt, "I1  misses:   ", Ir_total.m1);
+	  VG_(umsg)(fmt, "L2i misses:   ", Ir_total.m2);
       VG_(umsg)(fmt, "LLi misses:   ", Ir_total.mL);
 
       if (0 == Ir_total.a) Ir_total.a = 1;
       VG_(percentify)(Ir_total.m1, Ir_total.a, 2, l1+1, buf1);
       VG_(umsg)("I1  miss rate: %s\n", buf1);
+
+      VG_(percentify)(Ir_total.m2, Ir_total.a, 2, l1+1, buf1);
+      VG_(umsg)("L2i miss rate: %s\n", buf1);
 
       VG_(percentify)(Ir_total.mL, Ir_total.a, 2, l1+1, buf1);
       VG_(umsg)("LLi miss rate: %s\n", buf1);
@@ -1509,6 +1690,7 @@ static void cg_fini(Int exitcode)
        * determine the width of columns 2 & 3. */
       D_total.a  = Dr_total.a  + Dw_total.a;
       D_total.m1 = Dr_total.m1 + Dw_total.m1;
+	  D_total.m2 = Dr_total.m2 + Dw_total.m2;
       D_total.mL = Dr_total.mL + Dw_total.mL;
 
       /* Make format string, getting width right for numbers */
@@ -1519,6 +1701,8 @@ static void cg_fini(Int exitcode)
                      D_total.a, Dr_total.a, Dw_total.a);
       VG_(umsg)(fmt, "D1  misses:   ",
                      D_total.m1, Dr_total.m1, Dw_total.m1);
+      VG_(umsg)(fmt, "L2d misses:   ",
+                     D_total.m2, Dr_total.m2, Dw_total.m2);
       VG_(umsg)(fmt, "LLd misses:   ",
                      D_total.mL, Dr_total.mL, Dw_total.mL);
 
@@ -1530,17 +1714,44 @@ static void cg_fini(Int exitcode)
       VG_(percentify)(Dw_total.m1, Dw_total.a, 1, l3+1, buf3);
       VG_(umsg)("D1  miss rate: %s (%s     + %s  )\n", buf1, buf2,buf3);
 
+      VG_(percentify)( D_total.m2,  D_total.a, 1, l1+1, buf1);
+      VG_(percentify)(Dr_total.m2, Dr_total.a, 1, l2+1, buf2);
+      VG_(percentify)(Dw_total.m2, Dw_total.a, 1, l3+1, buf3);
+      VG_(umsg)("L2d miss rate: %s (%s     + %s  )\n", buf1, buf2,buf3);
+
+
       VG_(percentify)( D_total.mL,  D_total.a, 1, l1+1, buf1);
       VG_(percentify)(Dr_total.mL, Dr_total.a, 1, l2+1, buf2);
       VG_(percentify)(Dw_total.mL, Dw_total.a, 1, l3+1, buf3);
       VG_(umsg)("LLd miss rate: %s (%s     + %s  )\n", buf1, buf2,buf3);
       VG_(umsg)("\n");
 
+
+	 /* L2 overall results */
+
+      L2_total   = Dr_total.m1 + Dw_total.m1 + Ir_total.m1;
+      L2_total_r = Dr_total.m1 + Ir_total.m1;
+      L2_total_w = Dw_total.m1;
+      VG_(umsg)(fmt, "L2 refs:      ",
+                     L2_total, L2_total_r, L2_total_w);
+
+      L2_total_m  = Dr_total.m2 + Dw_total.m2 + Ir_total.m2;
+      L2_total_mr = Dr_total.m2 + Ir_total.m2;
+      L2_total_mw = Dw_total.m2;
+      VG_(umsg)(fmt, "L2 misses:    ",
+                     L2_total_m, L2_total_mr, L2_total_mw);
+
+      VG_(percentify)(L2_total_m,  (Ir_total.a + D_total.a),  1, l1+1, buf1);
+      VG_(percentify)(L2_total_mr, (Ir_total.a + Dr_total.a), 1, l2+1, buf2);
+      VG_(percentify)(L2_total_mw, Dw_total.a,                1, l3+1, buf3);
+      VG_(umsg)("L2 miss rate:  %s (%s     + %s  )\n", buf1, buf2,buf3);
+	      VG_(umsg)("\n");
+
       /* LL overall results */
 
-      LL_total   = Dr_total.m1 + Dw_total.m1 + Ir_total.m1;
-      LL_total_r = Dr_total.m1 + Ir_total.m1;
-      LL_total_w = Dw_total.m1;
+      LL_total   = Dr_total.m2 + Dw_total.m2 + Ir_total.m2;
+      LL_total_r = Dr_total.m2 + Ir_total.m2;
+      LL_total_w = Dw_total.m2;
       VG_(umsg)(fmt, "LL refs:      ",
                      LL_total, LL_total_r, LL_total_w);
 
@@ -1613,6 +1824,12 @@ static void cg_fini(Int exitcode)
       VG_(dmsg)("cachegrind: InstrInfo table size: %lu\n",
                 VG_(OSetGen_Size)(instrInfoTable));
    }
+    
+    //VG_(umsg)("TLB misses:\n");
+    //VG_(umsg)("TLB Ir total refs: %llu\n",t_Ir_total.a);
+    //VG_(umsg)("TLB Ir total l1 misses: %llu\n",t_Ir_total.t1);
+    //VG_(umsg)("TLB Ir total l2 misses: %llu\n",t_Ir_total.t2);
+    tlb_fini();
 }
 
 /*--------------------------------------------------------------------*/
@@ -1651,11 +1868,16 @@ static Bool cg_process_cmd_line_option(Char* arg)
    if (VG_(str_clo_cache_opt)(arg,
                               &clo_I1_cache,
                               &clo_D1_cache,
-                              &clo_LL_cache)) {}
-
+                              &clo_L2_cache,
+                              &clo_LL_cache,
+                              &clo_iTLB_cache,
+                              &clo_dTLB_cache,
+                              &clo_L2TLB_cache)) {}
+    
+   else if(tlb_process_cmd_line_option(arg)){}
    else if VG_STR_CLO( arg, "--cachegrind-out-file", clo_cachegrind_out_file) {}
-   else if VG_BOOL_CLO(arg, "--cache-sim",  clo_cache_sim)  {}
-   else if VG_BOOL_CLO(arg, "--branch-sim", clo_branch_sim) {}
+   else if VG_BOOL_CLO(arg, "--cache-sim"          , clo_cache_sim)    {}
+   else if VG_BOOL_CLO(arg, "--branch-sim"         , clo_branch_sim)   {}
    else
       return False;
 
@@ -1665,9 +1887,10 @@ static Bool cg_process_cmd_line_option(Char* arg)
 static void cg_print_usage(void)
 {
    VG_(print_cache_clo_opts)();
+    tlb_print_usage();
    VG_(printf)(
-"    --cache-sim=yes|no  [yes]        collect cache stats?\n"
-"    --branch-sim=yes|no [no]         collect branch prediction stats?\n"
+"    --cache-sim=yes|no     [yes]     collect cache stats?\n"
+"    --branch-sim=yes|no    [no]      collect branch prediction stats?\n"
 "    --cachegrind-out-file=<file>     output file name [cachegrind.out.%%p]\n"
    );
 }
@@ -1689,14 +1912,12 @@ static void cg_pre_clo_init(void)
 {
    VG_(details_name)            ("Cachegrind");
    VG_(details_version)         (NULL);
-   VG_(details_description)     ("a cache and branch-prediction profiler");
+   VG_(details_description)     ("a TLB, cache and branch-prediction profiler");
    VG_(details_copyright_author)(
       "Copyright (C) 2002-2012, and GNU GPL'd, by Nicholas Nethercote et al.");
    VG_(details_bug_reports_to)  (VG_BUGS_TO);
    VG_(details_avg_translation_sizeB) ( 500 );
 
-   VG_(clo_vex_control).iropt_register_updates
-      = VexRegUpdSpAtMemAccess; // overridable by the user.
    VG_(basic_tool_funcs)          (cg_post_clo_init,
                                    cg_instrument,
                                    cg_fini);
@@ -1709,7 +1930,7 @@ static void cg_pre_clo_init(void)
 
 static void cg_post_clo_init(void)
 {
-   cache_t I1c, D1c, LLc; 
+   cache_t I1c, D1c, L2c, LLc, iTLBc, dTLBc, L2TLBc;
 
    CC_table =
       VG_(OSetGen_Create)(offsetof(LineCC, loc),
@@ -1727,16 +1948,28 @@ static void cg_post_clo_init(void)
                           VG_(malloc), "cg.main.cpci.3",
                           VG_(free));
 
-   VG_(post_clo_init_configure_caches)(&I1c, &D1c, &LLc,
+   VG_(post_clo_init_configure_caches)(&I1c, &D1c, &L2c, &LLc, &iTLBc, &dTLBc, &L2TLBc,
                                        &clo_I1_cache,
                                        &clo_D1_cache,
-                                       &clo_LL_cache);
+                                       &clo_L2_cache,
+                                       &clo_LL_cache,
+                                       &clo_iTLB_cache,
+                                       &clo_dTLB_cache,
+                                       &clo_L2TLB_cache);
 
+    //VG_(dmsg)("Final LL got here is %d,%d,%d\n",LLc.size,LLc.assoc,LLc.line_size);
+
+    //VG_(dmsg)("Final L2 got here is %d,%d,%d\n",L2c.size,L2c.assoc,L2c.line_size);
+    //VG_(dmsg)("Final LL got here is %d,%d,%d\n",LLc.size,LLc.assoc,LLc.line_size);
+    //VG_(dmsg)("Final TLB got here is %d,%d,%d\n",TLBc.size,TLBc.assoc,TLBc.line_size);
+    
+    
    // min_line_size is used to make sure that we never feed
    // accesses to the simulator straddling more than two
    // cache lines at any cache level
    min_line_size = (I1c.line_size < D1c.line_size) ? I1c.line_size : D1c.line_size;
    min_line_size = (LLc.line_size < min_line_size) ? LLc.line_size : min_line_size;
+   min_line_size = (L2c.line_size < min_line_size) ? L2c.line_size : min_line_size;
 
    Int largest_load_or_store_size
       = VG_(machine_get_size_of_largest_guest_register)();
@@ -1754,7 +1987,15 @@ static void cg_post_clo_init(void)
 
    cachesim_I1_initcache(I1c);
    cachesim_D1_initcache(D1c);
+   cachesim_L2_initcache(L2c);
    cachesim_LL_initcache(LLc);
+    
+    //Initialise TLB for simulation!
+    tlbsim_init(0,iTLBc.size,iTLBc.assoc,iTLBc.line_size);
+    tlbsim_init(1,dTLBc.size,dTLBc.assoc,dTLBc.line_size);
+    tlbsim_init(2,L2TLBc.size,L2TLBc.assoc,L2TLBc.line_size);
+    
+    tlb_post_clo_init();
 }
 
 VG_DETERMINE_INTERFACE_VERSION(cg_pre_clo_init)
